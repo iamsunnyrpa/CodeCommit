@@ -1,0 +1,101 @@
+AWS CodeCommit: Configuration, Access, and Workflow Management
+
+This document provides a detailed guide on various aspects of AWS CodeCommit, including its underlying architecture, access methods, security configurations, and features like triggers and approval rules.
+
+1. Core Concepts and Architecture
+
+Backend Storage: CodeCommit utilizes Amazon S3 internally for durable storage of repository data.   
+Encryption:
+Repositories can be encrypted using AWS-managed keys or customer-managed KMS keys (CMKs).   
+If a custom CMK is used, IAM principals interacting with the repository require explicit permissions to use that CMK. 
+
+Git Operations vs. API Calls: 
+It's important to distinguish between Git actions and AWS API calls. GitPull and GitPush are specific IAM permissions that control repository access via Git clients, not direct AWS API calls. Other management actions (like creating repositories or configuring triggers) are standard AWS API calls.   
+
+2. Access Methods and Authentication
+
+HTTPS: 
+Requires Git credentials configured in AWS IAM for authenticating Git operations over HTTPS. This method avoids the need for SSH key management.   
+
+SSH: 
+Involves generating an SSH key pair (e.g., using ssh-keygen -t rsa) and associating the public key with an IAM user for Git operations over SSH. Troubleshoot SSH key issues by ensuring the correct key format and configuration.   
+
+3. Private Access using VPC Endpoints
+
+To interact with CodeCommit repositories from resources within a VPC (like EC2 instances or containers) without traversing the public internet, configure VPC endpoints.
+
+Required Endpoint: 
+Create an interface VPC endpoint for CodeCommit (com.amazonaws.region.codecommit). This allows private API calls for repository management (create, update, delete) and Git operations.   
+
+IAM Permissions: 
+The IAM principal (User, Assumed Role, or Instance Profile) performing Git operations requires the codecommit:GitPull and codecommit:GitPush permissions for the specific repository ARN.
+
+
+ {
+   "Version": "2012-10-17",
+   "Statement": [
+     {
+       "Sid": "AllowGitAccess",
+       "Effect": "Allow",
+       "Action": [
+         "codecommit:GitPush",
+         "codecommit:GitPull"
+       ],
+       "Resource": "ARN-OF-CODECOMMIT"
+     }
+   ]
+ }
+  
+Troubleshooting:
+Monitor AWS CloudTrail logs for relevant API calls (GitPull, GitPush) to diagnose permission restrictions applied to the IAM principal.   
+
+4. CodeCommit Triggers (e.g., for Lambda)
+
+Triggers automate actions in response to repository events (e.g., code pushes).
+
+Configuration:
+Navigate to repository settings and select 'Triggers'.   
+Create a new trigger, providing a name, selecting the triggering events (e.g., push to main branch), and specifying the target branch.   
+Choose the target service (e.g., AWS Lambda) and select the specific function.   
+
+Lambda Permissions: 
+The target Lambda function requires permission to be invoked by CodeCommit. Grant this using the aws lambda add-permission CLI command:
+
+
+ {
+   "FunctionName": "Your-Lambda-Function-Name",
+   "StatementId": "AllowCodeCommitInvoke",
+   "Action": "lambda:InvokeFunction",
+   "Principal": "codecommit.amazonaws.com",
+   "SourceArn": "ARN-OF-CODECOMMIT-REPOSITORY",
+   "SourceAccount": "YOUR-AWS-ACCOUNT-ID"
+ }
+(Save this JSON structure to a file, e.g., AllowAccessfromMyDemoRepo.json, and execute aws lambda add-permission --cli-input-json file://AllowAccessfromMyDemoRepo.json )   
+
+Troubleshooting:
+Use the TestRepositoryTriggers API call (visible in CloudTrail) to diagnose trigger execution issues.   
+An error message like "AWS CodeCommit does not have access to the destination..." typically indicates missing Lambda invocation permissions or issues with the destination resource/KMS key.   
+
+5. Approval Rule Templates and Pull Requests (PRs)
+
+Approval rules enforce code review requirements before merging pull requests.
+
+Template Application: 
+Changes made to an approval rule template do not apply retroactively to existing, open pull requests. They only affect newly created PRs.   
+
+Overriding Rules: 
+If a PR is blocked due to unmet approval rules and an override is necessary, navigate to the PR's 'Approvals' section and select 'Override approval rules'. This bypasses the template rules for that specific PR, allowing the merge.   
+
+Approval Pool Members: 
+When defining who can approve, using the 'Fully Qualified ARN' option is recommended. This allows specific IAM users or assumed roles (including federated/SSO users via their assumed role ARN) to act as approvers, offering greater flexibility. For SSO users, the ARN format often follows arn:aws:sts::account_id:assumed-role/AWSSSO_RoleName/Username.   
+
+Auditing: 
+Use CloudTrail logs to track PR creation (CreatePullRequest API call ) and approval rule overrides (OverridePullRequestApprovalRules API call ).   
+
+Approving via CLI:
+Retrieve the PR details, specifically the revisionId, using aws codecommit get-pull-request --pull-request-id <ID>.   
+Approve the specific revision using aws codecommit update-pull-request-approval-state --pull-request-id <ID> --revision-id <Revision_ID> --approval-state APPROVE.
+
+Note:
+Once a PR created and you add the new member in approval rule template, new member can not approve the PR.
+
